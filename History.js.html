@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>JSDoc: Source: History.js</title>
+
+    <script src="scripts/prettify/prettify.js"> </script>
+    <script src="scripts/prettify/lang-css.js"> </script>
+    <!--[if lt IE 9]>
+      <script src="//html5shiv.googlecode.com/svn/trunk/html5.js"></script>
+    <![endif]-->
+    <link type="text/css" rel="stylesheet" href="styles/prettify-tomorrow.css">
+    <link type="text/css" rel="stylesheet" href="styles/jsdoc-default.css">
+</head>
+
+<body>
+
+<div id="main">
+
+    <h1 class="page-title">Source: History.js</h1>
+
+    
+
+
+
+    
+    <section>
+        <article>
+            <pre class="prettyprint source linenums"><code>/*
+ * Copyright 2020 WICKLETS LLC
+ *
+ * This file is part of Wick Engine.
+ *
+ * Wick Engine is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * Wick Engine is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with Wick Engine.  If not, see &lt;https://www.gnu.org/licenses/>.
+ */
+
+/**
+ * History utility class for undo/redo functionality.
+ */
+Wick.History = class {
+    /**
+     *
+     * @type {boolean}
+     */
+    static get VERBOSE () {
+        return false;
+    }
+
+    /**
+     * An Enum of all types of state saves.
+     */
+    static get StateType () {
+        return {
+            ALL_OBJECTS: 1,
+            ALL_OBJECTS_WITHOUT_PATHS: 2,
+            ONLY_VISIBLE_OBJECTS: 3,
+        };
+    }
+
+    /**
+     * Creates a new history object
+     */
+    constructor () {
+        this._undoStack = [];
+        this._redoStack = [];
+        this._snapshots = {};
+    }
+
+    /**
+     * Push the current state of the ObjectCache to the undo stack.
+     * @param {number} filter - the filter to choose which objects to serialize. See Wick.History.StateType
+     */
+    pushState (filter) {
+        this._redoStack = [];
+        this._undoStack.push(this._generateState(filter));
+    }
+
+    /**
+     * Pop the last state in the undo stack off and apply the new last state to the project.
+     * @returns {boolean} True if the undo stack is non-empty, false otherwise
+     */
+    popState () {
+        if(this._undoStack.length &lt;= 1) {
+            return false;
+        }
+
+        var lastState = this._undoStack.pop();
+        this._redoStack.push(lastState);
+
+        var currentState = this._undoStack[this._undoStack.length - 1];
+        this._recoverState(currentState);
+
+        return true;
+    }
+
+    /**
+     * Recover a state that was undone.
+     * @returns {boolean} True if the redo stack is non-empty, false otherwise
+     */
+    recoverState () {
+        if(this._redoStack.length === 0) {
+            return false;
+        }
+
+        var recoveredState = this._redoStack.pop();
+        this._undoStack.push(recoveredState);
+
+        this._recoverState(recoveredState);
+
+        return true;
+    }
+
+    /**
+     *
+     * @param {string} name - the name of the snapshot
+     * @param {number} filter - the filter to choose which objects to serialize. See Wick.History.StateType
+     */
+    saveSnapshot (name, filter) {
+        this._snapshots[name] = this._generateState(filter || Wick.History.StateType.ALL_OBJECTS_WITHOUT_PATHS);
+    }
+
+    /**
+     * Save a state to the list of snapshots to be recovered at any time.
+     * @param {string} name - the name of the snapshot to recover
+     */
+    loadSnapshot (name) {
+        this._recoverState(this._snapshots[name]);
+    }
+
+    /**
+     * The number of states currently stored for undoing.
+     * @type {number}
+     */
+    get numUndoStates () {
+        return this._undoStack.length;
+    }
+
+    /**
+     * The number of states currently stored for redoing.
+     * @type {number}
+     */
+    get numRedoStates () {
+        return this._redoStack.length;
+    }
+
+    // NOTE: State saving/recovery can be greatly optimized by only saving the state of the things that were actually changed.
+    _generateState (stateType) {
+        var objects = [];
+
+        if(stateType === undefined) {
+            stateType = Wick.History.StateType.ALL_OBJECTS;
+        }
+
+        if(stateType === Wick.History.StateType.ALL_OBJECTS) {
+            objects = this._getAllObjects();
+        } else if (stateType === Wick.History.StateType.ALL_OBJECTS_WITHOUT_PATHS) {
+            objects = this._getAllObjectsWithoutPaths();
+        } else if(stateType === Wick.History.StateType.ONLY_VISIBLE_OBJECTS) {
+            objects = this._getVisibleObjects();
+        } else {
+            console.error('Wick.History._generateState: A valid stateType is required.');
+            return;
+        }
+
+        if(Wick.History.VERBOSE) {
+            console.log('Wick.History._generateState: Serializing ' + objects.length + ' objects using mode=' + stateType);
+        }
+
+        return objects.map(object => {
+            // The object most likely was altered in some way, make sure those changes will be reflected in the autosave.
+            object.needsAutosave = true;
+
+            return object.serialize();
+        });
+    }
+
+    _recoverState (state) {
+        state.forEach(objectData => {
+            var object = Wick.ObjectCache.getObjectByUUID(objectData.uuid);
+            object.deserialize(objectData);
+        });
+    }
+
+    _getAllObjects () {
+        var objects = Wick.ObjectCache.getActiveObjects(this.project);
+        objects.push(this.project);
+        return objects;
+    }
+
+    // this is used for an optimization when snapshots are saved for preview playing.
+    _getAllObjectsWithoutPaths () {
+        return this._getAllObjects().filter(object => {
+            return !(object instanceof Wick.Path);
+        });
+    }
+
+    _getVisibleObjects () {
+        var stateObjects = [];
+
+        // the project itself (for focus, options, etc)
+        stateObjects.push(this.project);
+
+        // the assets in the project
+        this.project.getAssets().forEach(asset => {
+            stateObjects.push(asset);
+        });
+
+        // the focused clip
+        stateObjects.push(this.project.focus);
+
+        // the focused timeline
+        stateObjects.push(this.project.focus.timeline);
+
+        // the selection
+        stateObjects.push(this.project.selection);
+
+        // layers on focused timeline
+        this.project.activeTimeline.layers.forEach(layer => {
+            stateObjects.push(layer);
+        });
+
+        // frames on focused timeline
+        this.project.activeTimeline.frames.forEach(frame => {
+            stateObjects.push(frame);
+        });
+
+        // objects+tweens on active frames
+        this.project.activeFrames.forEach(frame => {
+            frame.paths.forEach(path => {
+                stateObjects.push(path);
+            });
+            frame.clips.forEach(clip => {
+                stateObjects.push(clip);
+            });
+            frame.tweens.forEach(tween => {
+                stateObjects.push(tween);
+            })
+        });
+
+        return stateObjects;
+    }
+}
+</code></pre>
+        </article>
+    </section>
+
+
+
+
+</div>
+
+<nav>
+    <h2><a href="index.html">Home</a></h2><h3>Classes</h3><ul><li><a href="BuiltinAssets.html">BuiltinAssets</a></li><li><a href="GlobalAPI.html">GlobalAPI</a></li><li><a href="paper.SelectionGUI.html">SelectionGUI</a></li><li><a href="paper-paper.Selection.html">Selection</a></li><li><a href="SelectionWidget.html">SelectionWidget</a></li><li><a href="Wick.AutoSave.html">AutoSave</a></li><li><a href="Wick.Base.html">Base</a></li><li><a href="Wick.Button.html">Button</a></li><li><a href="Wick.Clip.html">Clip</a></li><li><a href="Wick.Clipboard.html">Clipboard</a></li><li><a href="Wick.FileCache.html">FileCache</a></li><li><a href="Wick.Frame.html">Frame</a></li><li><a href="Wick.GUIElement.Project.html">Project</a></li><li><a href="Wick.GUIElement.Timeline.html">Timeline</a></li><li><a href="Wick.GUIElement-Wick.GUIElement.Breadcrumbs.html">Breadcrumbs</a></li><li><a href="Wick.GUIElement-Wick.GUIElement.Button.html">Button</a></li><li><a href="Wick.History.html">History</a></li><li><a href="Wick.HTMLExport.html">HTMLExport</a></li><li><a href="Wick.HTMLPreview.html">HTMLPreview</a></li><li><a href="Wick.ImageSequence.html">ImageSequence</a></li><li><a href="Wick.Layer.html">Layer</a></li><li><a href="Wick.Path.html">Path</a></li><li><a href="Wick.Project.html">Project</a></li><li><a href="Wick.Selection.html">Selection</a></li><li><a href="Wick.Tickable.html">Tickable</a></li><li><a href="Wick.Timeline.html">Timeline</a></li><li><a href="Wick.Tools-Wick.Tools.Brush.html">Brush</a></li><li><a href="Wick.Tools-Wick.Tools.Cursor.html">Cursor</a></li><li><a href="Wick.Tools-Wick.Tools.Ellipse.html">Ellipse</a></li><li><a href="Wick.Tools-Wick.Tools.Eraser.html">Eraser</a></li><li><a href="Wick.Tools-Wick.Tools.Eyedropper.html">Eyedropper</a></li><li><a href="Wick.Tools-Wick.Tools.FillBucket.html">FillBucket</a></li><li><a href="Wick.Tools-Wick.Tools.Interact.html">Interact</a></li><li><a href="Wick.Tools-Wick.Tools.Line.html">Line</a></li><li><a href="Wick.Tools-Wick.Tools.None.html">None</a></li><li><a href="Wick.Tools-Wick.Tools.Pan.html">Pan</a></li><li><a href="Wick.Tools-Wick.Tools.Pencil.html">Pencil</a></li><li><a href="Wick.Tools-Wick.Tools.Rectangle.html">Rectangle</a></li><li><a href="Wick.Tools-Wick.Tools.Text.html">Text</a></li><li><a href="Wick.Tools-Wick.Tools.Zoom.html">Zoom</a></li><li><a href="Wick.Transformation.html">Transformation</a></li><li><a href="Wick.Tween.html">Tween</a></li><li><a href="Wick.View-Wick.View.Clip.html">Clip</a></li><li><a href="Wick.View-Wick.View.Frame.html">Frame</a></li><li><a href="Wick.View-Wick.View.Path.html">Path</a></li><li><a href="Wick.View-Wick.View.Selection.html">Selection</a></li><li><a href="Wick.WickFile.html">WickFile</a></li><li><a href="Wick.WickObjectFile.html">WickObjectFile</a></li><li><a href="Wick.ZIPExport.html">ZIPExport</a></li><li><a href="WickObjectCache.html">WickObjectCache</a></li><li><a href="Wick-Wick.Asset.html">Asset</a></li><li><a href="Wick-Wick.AudioTrack.html">AudioTrack</a></li><li><a href="Wick-Wick.ClipAsset.html">ClipAsset</a></li><li><a href="Wick-Wick.Color.html">Color</a></li><li><a href="Wick-Wick.FileAsset.html">FileAsset</a></li><li><a href="Wick-Wick.FontAsset.html">FontAsset</a></li><li><a href="Wick-Wick.GIFAsset.html">GIFAsset</a></li><li><a href="Wick-Wick.GUIElement.html">GUIElement</a></li><li><a href="Wick-Wick.ImageAsset.html">ImageAsset</a></li><li><a href="Wick-Wick.SoundAsset.html">SoundAsset</a></li><li><a href="Wick-Wick.SVGAsset.html">SVGAsset</a></li><li><a href="Wick-Wick.Tool.html">Tool</a></li><li><a href="Wick-Wick.ToolSettings.html">ToolSettings</a></li><li><a href="Wick-Wick.View.html">View</a></li></ul><h3>Global</h3><ul><li><a href="global.html#type">type</a></li><li><a href="global.html#Wick">Wick</a></li></ul>
+</nav>
+
+<br class="clear">
+
+<footer>
+    Documentation generated by <a href="https://github.com/jsdoc/jsdoc">JSDoc 3.6.4</a> on Tue Apr 21 2020 15:58:26 GMT-0400 (Eastern Daylight Time)
+</footer>
+
+<script> prettyPrint(); </script>
+<script src="scripts/linenumber.js"> </script>
+</body>
+</html>

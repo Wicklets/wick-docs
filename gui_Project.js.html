@@ -1,0 +1,539 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>JSDoc: Source: gui/Project.js</title>
+
+    <script src="scripts/prettify/prettify.js"> </script>
+    <script src="scripts/prettify/lang-css.js"> </script>
+    <!--[if lt IE 9]>
+      <script src="//html5shiv.googlecode.com/svn/trunk/html5.js"></script>
+    <![endif]-->
+    <link type="text/css" rel="stylesheet" href="styles/prettify-tomorrow.css">
+    <link type="text/css" rel="stylesheet" href="styles/jsdoc-default.css">
+</head>
+
+<body>
+
+<div id="main">
+
+    <h1 class="page-title">Source: gui/Project.js</h1>
+
+    
+
+
+
+    
+    <section>
+        <article>
+            <pre class="prettyprint source linenums"><code>/*
+ * Copyright 2020 WICKLETS LLC
+ *
+ * This file is part of Wick Engine.
+ *
+ * Wick Engine is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * Wick Engine is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with Wick Engine.  If not, see &lt;https://www.gnu.org/licenses/>.
+ */
+
+/**
+ * The Project GUIElement handles the creation of the canvas and drawing the rest of the GUIElements.
+ */
+Wick.GUIElement.Project = class extends Wick.GUIElement {
+    /**
+     * Create a new GUIElement and build the canvas.
+     */
+    constructor (model) {
+        super(model);
+
+        this._canvas = document.createElement('canvas');
+        this._ctx = this._canvas.getContext('2d');
+
+        this._canvasContainer = document.createElement('div');
+        this._canvasContainer.style.width = "100%";
+        this._canvasContainer.style.height = "100%";
+        this._canvasContainer.appendChild(this._canvas);
+
+        this._drawnElements = [];
+
+        this._mouse = {x: 0, y: 0};
+        this._mouseHoverTargets = [];
+
+        this._scrollX = 0;
+        this._scrollY = 0;
+
+        this._popupMenu = null;
+
+        this._onProjectModified = () => {};
+        this._onProjectSoftModified = () => {};
+    }
+
+    /**
+     * The div containing the GUI canvas
+     */
+    get canvasContainer () {
+        return this._canvasContainer;
+    }
+
+    set canvasContainer (canvasContainer) {
+        this._canvasContainer = canvasContainer;
+
+        if(this._canvas !== this._canvasContainer.children[0]) {
+            this._canvasContainer.innerHTML = '';
+            this._canvasContainer.appendChild(this._canvas);
+        }
+
+        if(!this._mouseEventsAttached) {
+            // Mouse events
+            // (Only call these with non-touch devices)
+            document.addEventListener('mousemove', e => {
+                if(e.touches) return;
+                this._onMouseMove(e);
+            }, false);
+
+            document.addEventListener('mouseup', e => {
+                if(e.touches) return;
+                this._onMouseUp(e);
+            }, false);
+
+            this._canvas.addEventListener('mousedown', e => {
+                if(e.touches) return;
+                this._onMouseDown(e);
+            }, false);
+
+            // Auto-close popup menu if there is a click off-canvas
+            document.addEventListener('mousedown', e => {
+                if(e.touches) return;
+                if(e.target !== this._canvas) {
+                    this.closePopupMenu();
+                    this.draw();
+                }
+            }, false);
+
+            // Scroll events
+            $(this._canvas).on('mousewheel', this._onMouseWheel.bind(this));
+
+            // Touch events
+            this._canvas.addEventListener('touchstart', e => {
+                e.buttons = 0;
+                e.clientX = e.touches[0].clientX;
+                e.clientY = e.touches[0].clientY;
+                this._touchStartX = e.clientX;
+                this._touchStartY = e.clientY;
+                e.movementX = e.touches[0].movementX;
+                e.movementY = e.touches[0].movementY;
+                this._onMouseMove(e);
+                this._onMouseDown(e);
+            }, false);
+            document.addEventListener('touchmove', e => {
+                e.buttons = 1;
+                e.clientX = e.touches[0].clientX;
+                e.clientY = e.touches[0].clientY;
+                e.movementX = e.clientX - this._touchStartX;
+                e.movementY = e.clientY - this._touchStartY;
+                this._touchStartX = e.clientX;
+                this._touchStartY = e.clientY;
+                this._onMouseMove(e);
+            }, false);
+            document.addEventListener('touchend', e => {
+                this._onMouseUp(e);
+            }, false);
+
+            this._mouseEventsAttached = true;
+        }
+    }
+
+    /**
+     * Resize the canvas so that it fits inside the canvas container, call this when the size of the canvas container changes.
+     */
+    resize () {
+        if(!this._canvasContainer || !this._canvas) return;
+
+        var containerWidth = this.canvasContainer.offsetWidth;
+        var containerHeight = this.canvasContainer.offsetHeight;
+
+        // Round off canvas size to avoid blurryness.
+        containerWidth = Math.floor(containerWidth) - 2;
+        containerHeight = Math.floor(containerHeight) - 1;
+
+        if(this._canvas.width !== containerWidth) {
+            this._canvas.width = containerWidth;
+        }
+        if(this._canvas.height !== containerHeight) {
+            this._canvas.height = containerHeight;
+        }
+    };
+
+    /**
+     * Draw this GUIElement and update the mouse state
+     */
+    draw () {
+        var ctx = this.ctx;
+
+        // Make sure canvas is the correct size
+        this.resize();
+
+        // Reset drawn objects list
+        this._drawnElements = [];
+
+        // Draw the entire GUI
+        ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+        this.model.activeTimeline.guiElement.draw();
+
+        // Draw current popup menu
+        if(this._popupMenu) {
+            this._popupMenu.draw();
+        }
+
+        // Draw tooltips
+        this._mouseHoverTargets.forEach(target => {
+            if(target.tooltip) {
+                target.tooltip.draw(target.localTranslation.x, target.localTranslation.y);
+            }
+        });
+    }
+
+    /**
+     * Give a function to call when the timeline modifies the project.
+     * @param {function} fn - the function to call
+     */
+    onProjectModified (fn) {
+        this._onProjectModified = fn;
+    }
+
+    /**
+     * Give a function to call when the timeline "soft modifies" the project (moving the playhead, etc).
+     * @param {function} fn - the function to call
+     */
+    onProjectSoftModified (fn) {
+        this._onProjectSoftModified = fn;
+    }
+
+    /**
+     * Add a GUIElement to the list of objects that were drawn in the last draw call.
+     * @param {Wick.GUIElement} elem - the GUIElement to add
+     */
+    markElementAsDrawn (elem) {
+        this._drawnElements.push(elem);
+    }
+
+    /**
+     * The amount the timeline is scrolled horizontally.
+     * @type {number}
+     */
+    get scrollX () {
+        return this._scrollX;
+    }
+
+    set scrollX (scrollX) {
+        if(scrollX &lt; 0) scrollX = 0;
+        if(scrollX > this.horizontalScrollSpace) scrollX = this.horizontalScrollSpace;
+        this._scrollX = scrollX;
+    }
+
+    /**
+     * The amount the timeline is scrolled vertically.
+     * @type {number}
+     */
+    get scrollY () {
+        return this._scrollY;
+    }
+
+    set scrollY (scrollY) {
+        if(scrollY &lt; 0) scrollY = 0;
+        if(scrollY > this.verticalScrollSpace) scrollY = this.verticalScrollSpace;
+        this._scrollY = scrollY;
+    }
+
+    /**
+     * The amount of distance the timeline can be scrolled horizontally. Depends on the number of frames.
+     * @type {number}
+     */
+    get horizontalScrollSpace () {
+        return (this.model.activeTimeline.length * this.gridCellWidth * 3) + 500;
+    }
+
+    /**
+     * The amount of distance the timeline can be scrolled vertically. Depends on the number of layers.
+     * @type {number}
+     */
+    get verticalScrollSpace () {
+        return this.model.activeTimeline.layers.length * this.gridCellHeight + this.gridCellHeight * 2;
+    }
+
+    /**
+     * Open a popup menu
+     * @param {Wick.GUIElement.PopupMenu} popupMenu - the PopupMenu to open
+     */
+    openPopupMenu (popupMenu) {
+        this._popupMenu = popupMenu;
+        this.draw();
+    }
+
+    /**
+     * Close the current popup menu
+     */
+    closePopupMenu () {
+        this._popupMenu = null;
+        this.draw();
+    }
+
+    /**
+     * String representation of the current frame size, can be "small", "normal", or "large".
+     * @type {string}
+     */
+    get frameSizeMode () {
+        if(Wick.GUIElement.GRID_DEFAULT_CELL_WIDTH === Wick.GUIElement.GRID_SMALL_CELL_WIDTH) {
+            return 'small';
+        } else if(Wick.GUIElement.GRID_DEFAULT_CELL_WIDTH === Wick.GUIElement.GRID_NORMAL_CELL_WIDTH) {
+            return 'normal'
+        } else if(Wick.GUIElement.GRID_DEFAULT_CELL_WIDTH === Wick.GUIElement.GRID_LARGE_CELL_WIDTH) {
+            return 'large';
+        }
+    }
+
+    /**
+     * Drop an asset onto the timeline.
+     * @param {string} uuid - The UUID of the desired asset.
+     * @param {number} x - The x location of the image after creation in relation to the window.
+     * @param {number} y - The y location of the image after creation in relation to the window.
+     * @param {boolean} drop - If true, will drop the asset with the uuid onto the hovered frame, modifying the frame.
+     */
+    dragAssetAtPosition (uuid, x, y, drop) {
+        this._onMouseMove({clientX: x, clientY: y, buttons: 0});
+        var target = this._getTopMouseTarget();
+        if(!target || !(target.model instanceof Wick.Frame)) {
+            return;
+        }
+
+        var frame = target.model;
+        var asset = target.project.model.getAssetByUUID(uuid);
+        var oldSound = frame.sound;
+        frame.sound = asset;
+
+        if(drop) {
+            this.projectWasModified();
+        } else {
+            this.draw();
+            if(oldSound) {
+                frame.sound = oldSound;
+            } else {
+                frame.removeSound();
+            }
+        }
+    }
+
+    /**
+     * Auto scrolls the timeline if the playhead is considered off-screen.
+     * This is built specifically for moving the playead with hotkeys.
+     */
+    checkForPlayheadAutoscroll () {
+        var scrollWidth = this.canvas.width;
+        scrollWidth -= Wick.GUIElement.LAYERS_CONTAINER_WIDTH;
+        scrollWidth -= Wick.GUIElement.SCROLLBAR_SIZE;
+        scrollWidth -= this.gridCellWidth;
+
+        var scrollMin = this.scrollX;
+        var scrollMax = this.scrollX + scrollWidth;
+
+        var playheadPosition = this.model.activeTimeline.playheadPosition;
+        var playheadX = (playheadPosition - 1) * this.gridCellWidth;
+
+        if(playheadX &lt; scrollMin) {
+            this.scrollX = playheadX;
+            this.draw();
+        } if (playheadX > scrollMax) {
+            this.scrollX = playheadX - scrollWidth;
+            this.draw();
+        }
+    }
+
+    _onMouseMove (e) {
+        // Update mouse position
+        var rect = this._canvas.getBoundingClientRect();
+        this._mouse = {
+            x: e.clientX - rect.left,
+            y: e.clientY - rect.top
+        };
+
+        // Optimization: Only update if the mouse is on the canvas (unless something is being dragged)
+        var mouseOffCanvas = (
+            this._mouse.x &lt; 0 ||
+            this._mouse.y &lt; 0 ||
+            this._mouse.x > this.canvas.width ||
+            this._mouse.y > this.canvas.height);
+        if(e.buttons === 0 &amp;&amp; !this.canvasClicked &amp;&amp; mouseOffCanvas) {
+            if(this._mouseHoverTargets.length > 0) {
+                this._mouseHoverTargets = [];
+                this.draw();
+            }
+            return;
+        }
+
+        // Update mouse targets
+        if(e.buttons === 0) {
+            // Mouse moved - find new hover targets
+            this._mouseHoverTargets = this._drawnElements.filter(elem => {
+                return elem.model.project &amp;&amp; elem.mouseInBounds(this._mouse);
+            });
+
+            // Update cursor
+            var top = this._getTopMouseTarget();
+            if(top) {
+                this.canvas.style.cursor = top.cursor
+            } else {
+                this.canvas.style.cursor = 'default';
+            }
+        } else {
+            // Mouse is dragging - fire drag events if needed
+            if(!this.canvasClicked) {
+                // Don't drag if the click didn't originate from the canvas.
+            } else if (!this._mouseHasMoved(this._clickXY, {x:e.clientX, y:e.clientY}, 5)) {
+                // Don't start dragging things until the mouse has moved a little bit.
+            } else {
+                this._onMouseDrag(e);
+            }
+        }
+
+        this.draw();
+    }
+
+    _onMouseDown (e) {
+        this.closePopupMenu();
+        this.canvasClicked = true;
+        this._clickXY = {x: e.clientX, y: e.clientY};
+
+        if(this._mouseHoverTargets.length === 0) {
+            // Clicked nothing - clear the selection
+            this.model.selection.clear();
+        } else {
+            // Clicked something - run that element's onMouseDown
+            this._lastClickedElem = this._getTopMouseTarget();
+            this._lastClickedElem.onMouseDown(e);
+        }
+
+        this.draw();
+    }
+
+    _onMouseUp (e) {
+        // Call mouse event functions on the elements interacted with
+        var target = this._getTopMouseTarget();
+        if(this.canvasClicked &amp;&amp; this._isDragging) {
+            target &amp;&amp; target.onMouseUp(e);
+        } else if (this.canvasClicked &amp;&amp; this._lastClickedElem === target) {
+            target &amp;&amp; target.onMouseUp(e);
+        }
+
+        this.canvasClicked = false;
+        this._isDragging = false;
+
+        this.draw();
+
+        // Call mousemove so that the next mouse targets can be found without having to move the mouse again
+        this._onMouseMove(e);
+
+        clearInterval(this.autoscrollInterval);
+        this.autoscrollInterval = null;
+    }
+
+    _onMouseDrag (e) {
+        this._isDragging = true;
+
+        // Call event functons on the elements interacted with
+        var target = this._getTopMouseTarget();
+        if(target) {
+            this.canvas.style.cursor = 'grabbing';
+            target.onMouseDrag(e);
+            this._doAutoScroll(target);
+        }
+    }
+
+    _onMouseWheel (e) {
+        e.preventDefault();
+        var dx = e.deltaX * e.deltaFactor * 0.5;
+        var dy = e.deltaY * e.deltaFactor * 0.5;
+        this.scrollX += dx;
+        this.scrollY -= dy;
+        this.draw();
+    }
+
+    _getTopMouseTarget () {
+        var l = this._mouseHoverTargets.length-1;
+        return this._mouseHoverTargets[l];
+    }
+
+    _doAutoScroll (target) {
+        if(this.autoscrollInterval) return;
+
+        this.autoscrollInterval = setInterval(() => {
+            var left = Wick.GUIElement.LAYERS_CONTAINER_WIDTH;
+            var right = this.canvas.width - Wick.GUIElement.SCROLLBAR_SIZE;
+            var top = Wick.GUIElement.NUMBER_LINE_HEIGHT + Wick.GUIElement.BREADCRUMBS_HEIGHT;
+            var bottom = this.canvas.height - Wick.GUIElement.SCROLLBAR_SIZE;
+
+            var distFromLeft = this._mouse.x - left;
+            var distFromRight = this._mouse.x - right;
+            var distFromTop = this._mouse.y - top;
+            var distFromBottom = this._mouse.y - bottom;
+
+            if(target.canAutoScrollX) {
+                if(this._mouse.x > right) {
+                    this.scrollX += distFromRight * Wick.GUIElement.AUTO_SCROLL_SPEED;
+                }
+                if(this._mouse.x &lt; left) {
+                    this.scrollX += distFromLeft * Wick.GUIElement.AUTO_SCROLL_SPEED;
+                }
+            }
+            if(target.canAutoScrollY) {
+                if(this._mouse.y > bottom) {
+                    this.scrollY += distFromBottom * Wick.GUIElement.AUTO_SCROLL_SPEED;
+                }
+                if(this._mouse.y &lt; top) {
+                    this.scrollY += distFromTop * Wick.GUIElement.AUTO_SCROLL_SPEED;
+                }
+            }
+
+            this.draw();
+        }, 16);
+    }
+
+    _mouseHasMoved (origMouse, currMouse, amount) {
+        var d = {
+            x: Math.abs(origMouse.x - currMouse.x),
+            y: Math.abs(origMouse.y - currMouse.y),
+        };
+        return d.x > amount || d.y > amount;
+    }
+}
+</code></pre>
+        </article>
+    </section>
+
+
+
+
+</div>
+
+<nav>
+    <h2><a href="index.html">Home</a></h2><h3>Classes</h3><ul><li><a href="BuiltinAssets.html">BuiltinAssets</a></li><li><a href="GlobalAPI.html">GlobalAPI</a></li><li><a href="paper.SelectionGUI.html">SelectionGUI</a></li><li><a href="paper-paper.Selection.html">Selection</a></li><li><a href="SelectionWidget.html">SelectionWidget</a></li><li><a href="Wick.AutoSave.html">AutoSave</a></li><li><a href="Wick.Base.html">Base</a></li><li><a href="Wick.Button.html">Button</a></li><li><a href="Wick.Clip.html">Clip</a></li><li><a href="Wick.Clipboard.html">Clipboard</a></li><li><a href="Wick.FileCache.html">FileCache</a></li><li><a href="Wick.Frame.html">Frame</a></li><li><a href="Wick.GUIElement.Project.html">Project</a></li><li><a href="Wick.GUIElement.Timeline.html">Timeline</a></li><li><a href="Wick.GUIElement-Wick.GUIElement.Breadcrumbs.html">Breadcrumbs</a></li><li><a href="Wick.GUIElement-Wick.GUIElement.Button.html">Button</a></li><li><a href="Wick.History.html">History</a></li><li><a href="Wick.HTMLExport.html">HTMLExport</a></li><li><a href="Wick.HTMLPreview.html">HTMLPreview</a></li><li><a href="Wick.ImageSequence.html">ImageSequence</a></li><li><a href="Wick.Layer.html">Layer</a></li><li><a href="Wick.Path.html">Path</a></li><li><a href="Wick.Project.html">Project</a></li><li><a href="Wick.Selection.html">Selection</a></li><li><a href="Wick.Tickable.html">Tickable</a></li><li><a href="Wick.Timeline.html">Timeline</a></li><li><a href="Wick.Tools-Wick.Tools.Brush.html">Brush</a></li><li><a href="Wick.Tools-Wick.Tools.Cursor.html">Cursor</a></li><li><a href="Wick.Tools-Wick.Tools.Ellipse.html">Ellipse</a></li><li><a href="Wick.Tools-Wick.Tools.Eraser.html">Eraser</a></li><li><a href="Wick.Tools-Wick.Tools.Eyedropper.html">Eyedropper</a></li><li><a href="Wick.Tools-Wick.Tools.FillBucket.html">FillBucket</a></li><li><a href="Wick.Tools-Wick.Tools.Interact.html">Interact</a></li><li><a href="Wick.Tools-Wick.Tools.Line.html">Line</a></li><li><a href="Wick.Tools-Wick.Tools.None.html">None</a></li><li><a href="Wick.Tools-Wick.Tools.Pan.html">Pan</a></li><li><a href="Wick.Tools-Wick.Tools.Pencil.html">Pencil</a></li><li><a href="Wick.Tools-Wick.Tools.Rectangle.html">Rectangle</a></li><li><a href="Wick.Tools-Wick.Tools.Text.html">Text</a></li><li><a href="Wick.Tools-Wick.Tools.Zoom.html">Zoom</a></li><li><a href="Wick.Transformation.html">Transformation</a></li><li><a href="Wick.Tween.html">Tween</a></li><li><a href="Wick.View-Wick.View.Clip.html">Clip</a></li><li><a href="Wick.View-Wick.View.Frame.html">Frame</a></li><li><a href="Wick.View-Wick.View.Path.html">Path</a></li><li><a href="Wick.View-Wick.View.Selection.html">Selection</a></li><li><a href="Wick.WickFile.html">WickFile</a></li><li><a href="Wick.WickObjectFile.html">WickObjectFile</a></li><li><a href="Wick.ZIPExport.html">ZIPExport</a></li><li><a href="WickObjectCache.html">WickObjectCache</a></li><li><a href="Wick-Wick.Asset.html">Asset</a></li><li><a href="Wick-Wick.AudioTrack.html">AudioTrack</a></li><li><a href="Wick-Wick.ClipAsset.html">ClipAsset</a></li><li><a href="Wick-Wick.Color.html">Color</a></li><li><a href="Wick-Wick.FileAsset.html">FileAsset</a></li><li><a href="Wick-Wick.FontAsset.html">FontAsset</a></li><li><a href="Wick-Wick.GIFAsset.html">GIFAsset</a></li><li><a href="Wick-Wick.GUIElement.html">GUIElement</a></li><li><a href="Wick-Wick.ImageAsset.html">ImageAsset</a></li><li><a href="Wick-Wick.SoundAsset.html">SoundAsset</a></li><li><a href="Wick-Wick.SVGAsset.html">SVGAsset</a></li><li><a href="Wick-Wick.Tool.html">Tool</a></li><li><a href="Wick-Wick.ToolSettings.html">ToolSettings</a></li><li><a href="Wick-Wick.View.html">View</a></li></ul><h3>Global</h3><ul><li><a href="global.html#type">type</a></li><li><a href="global.html#Wick">Wick</a></li></ul>
+</nav>
+
+<br class="clear">
+
+<footer>
+    Documentation generated by <a href="https://github.com/jsdoc/jsdoc">JSDoc 3.6.4</a> on Tue Apr 21 2020 15:58:26 GMT-0400 (Eastern Daylight Time)
+</footer>
+
+<script> prettyPrint(); </script>
+<script src="scripts/linenumber.js"> </script>
+</body>
+</html>

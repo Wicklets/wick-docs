@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>JSDoc: Source: GlobalAPI.js</title>
+
+    <script src="scripts/prettify/prettify.js"> </script>
+    <script src="scripts/prettify/lang-css.js"> </script>
+    <!--[if lt IE 9]>
+      <script src="//html5shiv.googlecode.com/svn/trunk/html5.js"></script>
+    <![endif]-->
+    <link type="text/css" rel="stylesheet" href="styles/prettify-tomorrow.css">
+    <link type="text/css" rel="stylesheet" href="styles/jsdoc-default.css">
+</head>
+
+<body>
+
+<div id="main">
+
+    <h1 class="page-title">Source: GlobalAPI.js</h1>
+
+    
+
+
+
+    
+    <section>
+        <article>
+            <pre class="prettyprint source linenums"><code>/*
+ * Copyright 2020 WICKLETS LLC
+ *
+ * This file is part of Wick Engine.
+ *
+ * Wick Engine is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * Wick Engine is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with Wick Engine.  If not, see &lt;https://www.gnu.org/licenses/>.
+ */
+
+GlobalAPI = class {
+    /**
+     * Defines all api members such as functions and properties.
+     * @type {string[]}
+     */
+    static get apiMemberNames () {
+        return [
+            'stop','play','gotoAndStop','gotoAndPlay','gotoNextFrame','gotoPrevFrame',
+            // These are currently disabled, they are very slow for some reason.
+            // They are currently hacked in inside Tickable._runFunction
+            //'project','root','parent','parentObject',
+            'isMouseDown','mouseX','mouseY','mouseMoveX','mouseMoveY',
+            'key','keys','isKeyDown','keyIsDown','isKeyJustPressed','keyIsJustPressed',
+            'random',
+            'playSound','stopAllSounds',
+            'onEvent',
+            'hideCursor','showCursor',
+        ];
+    }
+
+    /**
+     * @param {object} scriptOwner The tickable object which owns the script being evaluated.
+     */
+    constructor (scriptOwner) {
+        this.scriptOwner = scriptOwner;
+    }
+
+    /**
+     * Returns a list of api members bound to the script owner.
+     * @returns {object[]} Array of functions, properties, and api members.
+     */
+    get apiMembers () {
+        var members = [];
+
+        GlobalAPI.apiMemberNames.forEach(name => {
+            var fn = this[name];
+            if(fn instanceof Function) {
+                fn = fn.bind(this);
+            }
+            members.push({
+                name: name,
+                fn: fn,
+            })
+        });
+
+        return members;
+    }
+
+    /**
+     * Stops the timeline of the object's parent clip.
+     */
+    stop () {
+        this.scriptOwner.parentClip.stop();
+    }
+
+    /**
+     * Plays the timeline of the object's parent clip.
+     */
+    play () {
+        this.scriptOwner.parentClip.play();
+    }
+
+    /**
+     * Moves the plahead of the parent clip to a frame and stops the timeline of that parent clip.
+     * @param {string | number} frame Frame name or number to move playhead to.
+     */
+    gotoAndStop (frame) {
+        this.scriptOwner.parentClip.gotoAndStop(frame);
+    }
+
+    /**
+     * Moves the plahead of the parent clip to a frame and plays the timeline of that parent clip.
+     * @param {string | number} frame Frame name or number to move playhead to.
+     */
+    gotoAndPlay (frame) {
+        this.scriptOwner.parentClip.gotoAndPlay(frame);
+    }
+
+    /**
+     * Moves the playhead of the parent clip of the object to the next frame.
+     */
+    gotoNextFrame () {
+        this.scriptOwner.parentClip.gotoNextFrame();
+    }
+
+    /**
+     * Moves the playhead of the parent clip of this object to the previous frame.
+     */
+    gotoPrevFrame () {
+        this.scriptOwner.parentClip.gotoPrevFrame();
+    }
+
+    /**
+     * Returns an object representing the project with properties such as width, height, framerate, background color, and name.
+     * @returns {object} Project object.
+     */
+    get project () {
+        var project = this.scriptOwner.project &amp;&amp; this.scriptOwner.project.root;
+        if(project) {
+            // Attach some aliases to the project settings
+            project.width = this.scriptOwner.project.width;
+            project.height = this.scriptOwner.project.height;
+            project.framerate = this.scriptOwner.project.framerate;
+            project.backgroundColor = this.scriptOwner.project.backgroundColor;
+            project.name = this.scriptOwner.project.name;
+        }
+        return project;
+    }
+
+    /**
+     * @deprecated
+     * Legacy item which returns the project. Use 'project' instead.
+     */
+    get root () {
+        return this.project;
+    }
+
+    /**
+     * Returns a reference to the current object's parent.
+     * @returns Current object's parent.
+     */
+    get parent () {
+        return this.scriptOwner.parentClip;
+    }
+
+    /**
+     * @deprecated
+     * Legacy item which returns the parent clip. Use 'parent' instead.
+     */
+    get parentObject () {
+        return this.scriptOwner.parentClip;
+    }
+
+    /**
+     * Returns the last key pressed down.
+     * @returns {string | null} Returns null if no key has been pressed yet.
+     */
+    get key () {
+        if(!this.scriptOwner.project) return null;
+        return this.scriptOwner.project.currentKey;
+    }
+
+    /**
+     * Returns a list of all keys currently pressed down.
+     * @returns {string[]} All keys represented as strings. If no keys are pressed, an empty array is returned.
+     */
+    get keys () {
+        if(!this.scriptOwner.project) return null;
+        return this.scriptOwner.project.keysDown;
+    }
+
+    /**
+     * Returns true if the given key is currently down.
+     * @param {string} key
+     * @returns {bool}
+     */
+    isKeyDown (key) {
+        if(!this.scriptOwner.project) return null;
+        return this.scriptOwner.project.isKeyDown(key);
+    }
+
+    /**
+     * @deprecated
+     * Legacy item, use 'isKeyDown' instead.
+     */
+    keyIsDown (key) {
+        return this.isKeyDown(key.toLowerCase());
+    }
+
+    /**
+     * Returns true if the given key was just pressed within the last tick.
+     * @param {string} key
+     * @returns {bool}
+     */
+    isKeyJustPressed (key) {
+        if(!this.scriptOwner.project) return null;
+        return this.scriptOwner.project.isKeyJustPressed(key);
+    }
+
+    /**
+     * @deprecated
+     * Legacy item, use 'isKeyJustPressed' instead.
+     */
+    keyIsJustPressed (key) {
+        return this.keyIsJustPressed(key.toLowerCase());
+    }
+
+    /**
+     * Returns true if the mouse is currently held down.
+     * @returns {bool | null} Returns null if the object does not have a project.
+     */
+    isMouseDown () {
+        if(!this.scriptOwner.project) return null;
+        return this.scriptOwner.project.isMouseDown;
+    }
+
+    /**
+     * Returns the current x position of the mouse in relation to the canvas.
+     * @returns {number}
+     */
+    get mouseX () {
+        if(!this.scriptOwner.project) return null;
+        return this.scriptOwner.project.mousePosition.x;
+    }
+
+    /**
+     * Returns the current y position of the mouse in relation to the canvas.
+     * @returns {number}
+     */
+    get mouseY () {
+        if(!this.scriptOwner.project) return null;
+        return this.scriptOwner.project.mousePosition.y;
+    }
+
+    /**
+     * Returns the amount the mouse moved in the last tick on the x axis.
+     * @returns {number}
+     */
+    get mouseMoveX () {
+        if(!this.scriptOwner.project) return null;
+        return this.scriptOwner.project.mouseMove.x;
+    }
+
+    /**
+     * Returns the amount the mouse moved in the last tick on the y axis.
+     * @returns {number}
+     */
+    get mouseMoveY () {
+        if(!this.scriptOwner.project) return null;
+        return this.scriptOwner.project.mouseMove.y;
+    }
+
+    /**
+     * Returns a new random object.
+     * @returns {GlobalAPI.Random}
+     */
+    get random () {
+        return new GlobalAPI.Random();
+    }
+
+    /**
+     * Plays a sound which is currently in the asset library.
+     * @param {string} name - name of the sound asset in the library.
+     * @param {Object} options - options for the sound. See Wick.SoundAsset.play
+     * @returns {object} object representing the sound which was played.
+     */
+    playSound (assetName, options) {
+        if(!this.scriptOwner.project) return null;
+        return this.scriptOwner.project.playSound(assetName, options);
+    }
+
+    /**
+     * Stops sound(s) currently playing.
+     * @param {string} assetName - The name of the SoundAsset to stop.
+     * @param {number} id - (optional) The ID of the sound to stop. Returned by playSound. If an ID is not given, all instances of the given sound asset will be stopped.
+     */
+    stopSound (assetName, id) {
+        if(!this.scriptOwner.project) return null;
+        return this.scriptOwner.project.stopSound(assetName, id);
+    }
+    
+    /**
+     * Stops all currently playing sounds.
+     */
+    stopAllSounds () {
+        if(!this.scriptOwner.project) return null;
+        this.scriptOwner.project.stopAllSounds();
+    }
+
+    /**
+     * Attach a function to an event with a given name.
+     * @param {string} name - the name of the event to attach the function to
+     * @param {function} fn - the function to attach to the event
+     */
+    onEvent (name, fn) {
+        this.scriptOwner.onEvent(name, fn);
+    }
+
+    /**
+     * Hide the cursor while the project is running.
+     */
+    hideCursor () {
+        if(!this.scriptOwner.project) return null;
+        this.scriptOwner.project.hideCursor = true;
+    }
+
+    /**
+     * Don't hide the cursor while the project is running.
+     */
+    showCursor () {
+        if(!this.scriptOwner.project) return null;
+        this.scriptOwner.project.hideCursor = false;
+    }
+}
+
+GlobalAPI.Random = class {
+    constructor () {
+
+    }
+
+    /**
+     * Returns a random integer (whole number) between two given integers.
+     * @param {number} min The minimum of the returned integer.
+     * @param {number} max The maximum of the returned integer.
+     * @returns {number} A random number between min and max.
+     * https://stackoverflow.com/questions/4959975/generate-random-number-between-two-numbers-in-javascript
+     */
+    integer(min,max) {
+        return Math.floor(Math.random()*(max-min+1)+min);
+    }
+
+    /**
+     * Returns a random floating point (decimal) number between two given integers.
+     * @param {number} min The minimum of the returned number.
+     * @param {number} max The maximum of the returned number.
+     * @returns {number} A random number between min and max.
+     * https://stackoverflow.com/questions/4959975/generate-random-number-between-two-numbers-in-javascript
+     */
+    float(min, max) {
+        return (Math.random()*(max-min+1)+min);
+    }
+
+    /**
+     * Returns a random item from an array of items.
+     * @param {array} An array of objects.
+     * @returns {object | null} A random item contained in the array. Returns null if the given array has no items.
+     * https://stackoverflow.com/questions/4550505/getting-a-random-value-from-a-javascript-array
+     */
+    choice(array) {
+        if (array.length &lt;= 0) return null;
+        return array[Math.floor(Math.random() * array.length)]
+    }
+}
+</code></pre>
+        </article>
+    </section>
+
+
+
+
+</div>
+
+<nav>
+    <h2><a href="index.html">Home</a></h2><h3>Classes</h3><ul><li><a href="BuiltinAssets.html">BuiltinAssets</a></li><li><a href="GlobalAPI.html">GlobalAPI</a></li><li><a href="paper.SelectionGUI.html">SelectionGUI</a></li><li><a href="paper-paper.Selection.html">Selection</a></li><li><a href="SelectionWidget.html">SelectionWidget</a></li><li><a href="Wick.AutoSave.html">AutoSave</a></li><li><a href="Wick.Base.html">Base</a></li><li><a href="Wick.Button.html">Button</a></li><li><a href="Wick.Clip.html">Clip</a></li><li><a href="Wick.Clipboard.html">Clipboard</a></li><li><a href="Wick.FileCache.html">FileCache</a></li><li><a href="Wick.Frame.html">Frame</a></li><li><a href="Wick.GUIElement.Project.html">Project</a></li><li><a href="Wick.GUIElement.Timeline.html">Timeline</a></li><li><a href="Wick.GUIElement-Wick.GUIElement.Breadcrumbs.html">Breadcrumbs</a></li><li><a href="Wick.GUIElement-Wick.GUIElement.Button.html">Button</a></li><li><a href="Wick.History.html">History</a></li><li><a href="Wick.HTMLExport.html">HTMLExport</a></li><li><a href="Wick.HTMLPreview.html">HTMLPreview</a></li><li><a href="Wick.ImageSequence.html">ImageSequence</a></li><li><a href="Wick.Layer.html">Layer</a></li><li><a href="Wick.Path.html">Path</a></li><li><a href="Wick.Project.html">Project</a></li><li><a href="Wick.Selection.html">Selection</a></li><li><a href="Wick.Tickable.html">Tickable</a></li><li><a href="Wick.Timeline.html">Timeline</a></li><li><a href="Wick.Tools-Wick.Tools.Brush.html">Brush</a></li><li><a href="Wick.Tools-Wick.Tools.Cursor.html">Cursor</a></li><li><a href="Wick.Tools-Wick.Tools.Ellipse.html">Ellipse</a></li><li><a href="Wick.Tools-Wick.Tools.Eraser.html">Eraser</a></li><li><a href="Wick.Tools-Wick.Tools.Eyedropper.html">Eyedropper</a></li><li><a href="Wick.Tools-Wick.Tools.FillBucket.html">FillBucket</a></li><li><a href="Wick.Tools-Wick.Tools.Interact.html">Interact</a></li><li><a href="Wick.Tools-Wick.Tools.Line.html">Line</a></li><li><a href="Wick.Tools-Wick.Tools.None.html">None</a></li><li><a href="Wick.Tools-Wick.Tools.Pan.html">Pan</a></li><li><a href="Wick.Tools-Wick.Tools.Pencil.html">Pencil</a></li><li><a href="Wick.Tools-Wick.Tools.Rectangle.html">Rectangle</a></li><li><a href="Wick.Tools-Wick.Tools.Text.html">Text</a></li><li><a href="Wick.Tools-Wick.Tools.Zoom.html">Zoom</a></li><li><a href="Wick.Transformation.html">Transformation</a></li><li><a href="Wick.Tween.html">Tween</a></li><li><a href="Wick.View-Wick.View.Clip.html">Clip</a></li><li><a href="Wick.View-Wick.View.Frame.html">Frame</a></li><li><a href="Wick.View-Wick.View.Path.html">Path</a></li><li><a href="Wick.View-Wick.View.Selection.html">Selection</a></li><li><a href="Wick.WickFile.html">WickFile</a></li><li><a href="Wick.WickObjectFile.html">WickObjectFile</a></li><li><a href="Wick.ZIPExport.html">ZIPExport</a></li><li><a href="WickObjectCache.html">WickObjectCache</a></li><li><a href="Wick-Wick.Asset.html">Asset</a></li><li><a href="Wick-Wick.AudioTrack.html">AudioTrack</a></li><li><a href="Wick-Wick.ClipAsset.html">ClipAsset</a></li><li><a href="Wick-Wick.Color.html">Color</a></li><li><a href="Wick-Wick.FileAsset.html">FileAsset</a></li><li><a href="Wick-Wick.FontAsset.html">FontAsset</a></li><li><a href="Wick-Wick.GIFAsset.html">GIFAsset</a></li><li><a href="Wick-Wick.GUIElement.html">GUIElement</a></li><li><a href="Wick-Wick.ImageAsset.html">ImageAsset</a></li><li><a href="Wick-Wick.SoundAsset.html">SoundAsset</a></li><li><a href="Wick-Wick.SVGAsset.html">SVGAsset</a></li><li><a href="Wick-Wick.Tool.html">Tool</a></li><li><a href="Wick-Wick.ToolSettings.html">ToolSettings</a></li><li><a href="Wick-Wick.View.html">View</a></li></ul><h3>Global</h3><ul><li><a href="global.html#type">type</a></li><li><a href="global.html#Wick">Wick</a></li></ul>
+</nav>
+
+<br class="clear">
+
+<footer>
+    Documentation generated by <a href="https://github.com/jsdoc/jsdoc">JSDoc 3.6.4</a> on Tue Apr 21 2020 15:58:26 GMT-0400 (Eastern Daylight Time)
+</footer>
+
+<script> prettyPrint(); </script>
+<script src="scripts/linenumber.js"> </script>
+</body>
+</html>

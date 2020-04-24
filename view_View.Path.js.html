@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>JSDoc: Source: view/View.Path.js</title>
+
+    <script src="scripts/prettify/prettify.js"> </script>
+    <script src="scripts/prettify/lang-css.js"> </script>
+    <!--[if lt IE 9]>
+      <script src="//html5shiv.googlecode.com/svn/trunk/html5.js"></script>
+    <![endif]-->
+    <link type="text/css" rel="stylesheet" href="styles/prettify-tomorrow.css">
+    <link type="text/css" rel="stylesheet" href="styles/jsdoc-default.css">
+</head>
+
+<body>
+
+<div id="main">
+
+    <h1 class="page-title">Source: view/View.Path.js</h1>
+
+    
+
+
+
+    
+    <section>
+        <article>
+            <pre class="prettyprint source linenums"><code>/*
+ * Copyright 2020 WICKLETS LLC
+ *
+ * This file is part of Wick Engine.
+ *
+ * Wick Engine is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * Wick Engine is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with Wick Engine.  If not, see &lt;https://www.gnu.org/licenses/>.
+ */
+
+Wick.View.Path = class extends Wick.View {
+    /**
+     * Create a path view.
+     */
+    constructor () {
+        super();
+
+        this._item = null;
+    }
+
+    /**
+     * The paper.js representation of the Wick Path.
+     */
+    get item () {
+        if(!this._item) {
+            this.render();
+        }
+        return this._item;
+    }
+
+    /**
+     *
+     */
+    render () {
+        if(!this.model.json) {
+            console.warn('Path ' + this.model.uuid + ' is missing path JSON.');
+            return;
+        }
+        this.importJSON(this.model.json);
+    }
+
+    /**
+     * Import paper.js path data into this Wick Path, replacing the current path data.
+     * @param {object} json - Data for the path created with paper.js exportJSON({asString:false})
+     */
+    importJSON (json) {
+        if(this.model.project &amp;&amp; this.model.project.playing) return;
+
+        // Don't try to render rasters if there's no project attached - too dangerous!
+        // (asset image sources may not be able to be retrieved)
+        if(json[0] === 'Raster' &amp;&amp; !json[1].source.startsWith('data') &amp;&amp; !this.model.project) {
+            return;
+        }
+
+        // Backwards compatibility check for old raster formats:
+        if(json[0] === 'Raster' &amp;&amp; this.model.project) {
+            if(json[1].source.startsWith('data')) {
+                // Bug: Raw dataURL was saved, need find asset with that data
+                this.model.project.getAssets('Image').forEach(imageAsset => {
+                    if(imageAsset.src === json[1].source) {
+                        json[1].source = 'asset:' + imageAsset.uuid;
+                    }
+                })
+            } else if (json[1].source.startsWith('asset:')) {
+                // Current format, no fix needed
+            } else if (json[1].source === 'asset') {
+                // Old format: Asset UUID is stored in 'data'
+                json[1].source = 'asset:' + (json[1].asset || json[1].data.asset);
+            } else {
+                console.error('WARNING: raster source format not recognized:');
+                console.log(json);
+                return;
+            }
+        }
+
+        // Get image source from assets
+        var cachedImg = null;
+        if(json[0] === 'Raster' &amp;&amp; json[1].source.startsWith('asset:')) {
+            var assetUUID = json[1].source.split(':')[1];
+            var imageAsset = this.model.project.getAssetByUUID(assetUUID);
+            json[1].source = imageAsset.src;
+        }
+
+        // Import JSON data into paper.js
+        this._item = this.paper.importJSON(json);
+        this._item.remove();
+
+        // Check if we need to recover the UUID from the paper path
+        if(this._item.data.wickUUID) {
+            this.model.uuid = this._item.data.wickUUID;
+        } else {
+            this._item.data.wickUUID = this.model.uuid;
+            this._item.data.wickType = 'path';
+        }
+
+        // Extra text options
+        if(this._item instanceof paper.TextItem) {
+            // https://github.com/paperjs/paper.js/issues/937
+            this._item.fontWeight = this.model.fontWeight + ' ' + this.model.fontStyle;
+        }
+
+        // Apply onion skin style
+        // (This is done here in the Path code because we actually change the style of the path
+        // if the current onion skin mode is set to "outlines" or "tint")
+        var onionSkinStyle = this.model.project &amp;&amp; this.model.project.toolSettings.getSetting('onionSkinStyle');
+        if(this.model.parentFrame &amp;&amp; this.model.parentFrame.onionSkinned) {
+            this.item.data.originalStyle = this.item.data.originalStyle || {
+                strokeColor: this.item.strokeColor,
+                fillColor: this.item.fillColor,
+                strokeWidth: this.item.strokeWidth,
+            };
+
+            var frame = this.model.parentFrame;
+            var playheadPosition = this.model.project.focus.timeline.playheadPosition;
+
+            var onionTintColor = new Wick.Color("#ffffff");
+            if(frame.midpoint &lt; playheadPosition) {
+                onionTintColor = this.model.project.toolSettings.getSetting('backwardOnionSkinTint').rgba;
+            } else if(frame.midpoint > playheadPosition) {
+                onionTintColor = this.model.project.toolSettings.getSetting('forwardOnionSkinTint').rgba;
+            }
+
+            if(onionSkinStyle === 'standard') {
+                // We don't have to do anything!
+            } else if (onionSkinStyle === 'outlines') {
+                this.item.fillColor = 'rgba(0,0,0,0)'; // Make the fills transparent.
+                this.item.strokeWidth = this.model.project.toolSettings.getSetting('onionSkinOutlineWidth');
+                this.item.strokeColor = onionTintColor;
+            } else if (onionSkinStyle === 'tint') {
+                if(this.item.fillColor) this.item.fillColor = Wick.Color.average(new Wick.Color(this.item.fillColor.toCSS()), new Wick.Color(onionTintColor)).rgba;
+                if(this.item.strokeColor) this.item.strokeColor = Wick.Color.average(new Wick.Color(this.item.strokeColor.toCSS()), new Wick.Color(onionTintColor)).rgba;
+            }
+        } else {
+            if(this.item.data.originalStyle) {
+                this.item.strokeColor = this.item.data.originalStyle.strokeColor;
+                this.item.fillColor = this.item.data.originalStyle.fillColor;
+                this.item.strokeWidth = this.item.data.originalStyle.strokeWidth;
+            }
+            delete this.item.data.originalStyle;
+        }
+    }
+
+    /**
+     * Export this path as paper.js Path json data.
+     */
+    exportJSON () {
+        return Wick.View.Path.exportJSON(this.item);
+    }
+
+    /**
+     * Export a path as paper.js Path json data.
+     */
+    static exportJSON (item) {
+        // Recover original style (if needed - only neccesary if style was overritten by custom onion skin style)
+        if(item.data.originalStyle) {
+            item.strokeColor = item.data.originalStyle.strokeColor;
+            item.fillColor = item.data.originalStyle.fillColor;
+            item.strokeWidth = item.data.originalStyle.strokeWidth;
+        }
+        return item.exportJSON({asString:false});
+    }
+}
+</code></pre>
+        </article>
+    </section>
+
+
+
+
+</div>
+
+<nav>
+    <h2><a href="index.html">Home</a></h2><h3>Classes</h3><ul><li><a href="BuiltinAssets.html">BuiltinAssets</a></li><li><a href="GlobalAPI.html">GlobalAPI</a></li><li><a href="paper.SelectionGUI.html">SelectionGUI</a></li><li><a href="paper-paper.Selection.html">Selection</a></li><li><a href="SelectionWidget.html">SelectionWidget</a></li><li><a href="Wick.AutoSave.html">AutoSave</a></li><li><a href="Wick.Base.html">Base</a></li><li><a href="Wick.Button.html">Button</a></li><li><a href="Wick.Clip.html">Clip</a></li><li><a href="Wick.Clipboard.html">Clipboard</a></li><li><a href="Wick.FileCache.html">FileCache</a></li><li><a href="Wick.Frame.html">Frame</a></li><li><a href="Wick.GUIElement.Project.html">Project</a></li><li><a href="Wick.GUIElement.Timeline.html">Timeline</a></li><li><a href="Wick.GUIElement-Wick.GUIElement.Breadcrumbs.html">Breadcrumbs</a></li><li><a href="Wick.GUIElement-Wick.GUIElement.Button.html">Button</a></li><li><a href="Wick.History.html">History</a></li><li><a href="Wick.HTMLExport.html">HTMLExport</a></li><li><a href="Wick.HTMLPreview.html">HTMLPreview</a></li><li><a href="Wick.ImageSequence.html">ImageSequence</a></li><li><a href="Wick.Layer.html">Layer</a></li><li><a href="Wick.Path.html">Path</a></li><li><a href="Wick.Project.html">Project</a></li><li><a href="Wick.Selection.html">Selection</a></li><li><a href="Wick.Tickable.html">Tickable</a></li><li><a href="Wick.Timeline.html">Timeline</a></li><li><a href="Wick.Tools-Wick.Tools.Brush.html">Brush</a></li><li><a href="Wick.Tools-Wick.Tools.Cursor.html">Cursor</a></li><li><a href="Wick.Tools-Wick.Tools.Ellipse.html">Ellipse</a></li><li><a href="Wick.Tools-Wick.Tools.Eraser.html">Eraser</a></li><li><a href="Wick.Tools-Wick.Tools.Eyedropper.html">Eyedropper</a></li><li><a href="Wick.Tools-Wick.Tools.FillBucket.html">FillBucket</a></li><li><a href="Wick.Tools-Wick.Tools.Interact.html">Interact</a></li><li><a href="Wick.Tools-Wick.Tools.Line.html">Line</a></li><li><a href="Wick.Tools-Wick.Tools.None.html">None</a></li><li><a href="Wick.Tools-Wick.Tools.Pan.html">Pan</a></li><li><a href="Wick.Tools-Wick.Tools.Pencil.html">Pencil</a></li><li><a href="Wick.Tools-Wick.Tools.Rectangle.html">Rectangle</a></li><li><a href="Wick.Tools-Wick.Tools.Text.html">Text</a></li><li><a href="Wick.Tools-Wick.Tools.Zoom.html">Zoom</a></li><li><a href="Wick.Transformation.html">Transformation</a></li><li><a href="Wick.Tween.html">Tween</a></li><li><a href="Wick.View-Wick.View.Clip.html">Clip</a></li><li><a href="Wick.View-Wick.View.Frame.html">Frame</a></li><li><a href="Wick.View-Wick.View.Path.html">Path</a></li><li><a href="Wick.View-Wick.View.Selection.html">Selection</a></li><li><a href="Wick.WickFile.html">WickFile</a></li><li><a href="Wick.WickObjectFile.html">WickObjectFile</a></li><li><a href="Wick.ZIPExport.html">ZIPExport</a></li><li><a href="WickObjectCache.html">WickObjectCache</a></li><li><a href="Wick-Wick.Asset.html">Asset</a></li><li><a href="Wick-Wick.AudioTrack.html">AudioTrack</a></li><li><a href="Wick-Wick.ClipAsset.html">ClipAsset</a></li><li><a href="Wick-Wick.Color.html">Color</a></li><li><a href="Wick-Wick.FileAsset.html">FileAsset</a></li><li><a href="Wick-Wick.FontAsset.html">FontAsset</a></li><li><a href="Wick-Wick.GIFAsset.html">GIFAsset</a></li><li><a href="Wick-Wick.GUIElement.html">GUIElement</a></li><li><a href="Wick-Wick.ImageAsset.html">ImageAsset</a></li><li><a href="Wick-Wick.SoundAsset.html">SoundAsset</a></li><li><a href="Wick-Wick.SVGAsset.html">SVGAsset</a></li><li><a href="Wick-Wick.Tool.html">Tool</a></li><li><a href="Wick-Wick.ToolSettings.html">ToolSettings</a></li><li><a href="Wick-Wick.View.html">View</a></li></ul><h3>Global</h3><ul><li><a href="global.html#type">type</a></li><li><a href="global.html#Wick">Wick</a></li></ul>
+</nav>
+
+<br class="clear">
+
+<footer>
+    Documentation generated by <a href="https://github.com/jsdoc/jsdoc">JSDoc 3.6.4</a> on Tue Apr 21 2020 15:58:26 GMT-0400 (Eastern Daylight Time)
+</footer>
+
+<script> prettyPrint(); </script>
+<script src="scripts/linenumber.js"> </script>
+</body>
+</html>

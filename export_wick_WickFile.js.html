@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>JSDoc: Source: export/wick/WickFile.js</title>
+
+    <script src="scripts/prettify/prettify.js"> </script>
+    <script src="scripts/prettify/lang-css.js"> </script>
+    <!--[if lt IE 9]>
+      <script src="//html5shiv.googlecode.com/svn/trunk/html5.js"></script>
+    <![endif]-->
+    <link type="text/css" rel="stylesheet" href="styles/prettify-tomorrow.css">
+    <link type="text/css" rel="stylesheet" href="styles/jsdoc-default.css">
+</head>
+
+<body>
+
+<div id="main">
+
+    <h1 class="page-title">Source: export/wick/WickFile.js</h1>
+
+    
+
+
+
+    
+    <section>
+        <article>
+            <pre class="prettyprint source linenums"><code>/*
+ * Copyright 2020 WICKLETS LLC
+ *
+ * This file is part of Wick Engine.
+ *
+ * Wick Engine is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * Wick Engine is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with Wick Engine.  If not, see &lt;https://www.gnu.org/licenses/>.
+ */
+
+/**
+ * Utility class for creating and parsing wick files.
+ */
+Wick.WickFile = class {
+    /**
+     * Generate some metadata for debugging wick projects.
+     * @returns {object}
+     */
+    static generateMetaData () {
+        return {
+            wickengine: Wick.version,
+            lastModified: +new Date(),
+            platform: {
+                name: platform.name,
+                version: platform.version,
+                product: platform.product,
+                manufacturer: platform.manufacturer,
+                layout: platform.layout,
+                os: {
+                    architecture: platform.os.architecture,
+                    family: platform.os.family,
+                    version: platform.os.version,
+                },
+                description: platform.description,
+            }
+        };
+    }
+
+    /**
+     * Create a project from a wick file.
+     * @param {File} wickFile - Wick file containing project data.
+     * @param {function} callback - Function called when the project is created.
+     * @param {string} format - The format to return. Can be 'blob' or 'base64'.
+     */
+    static fromWickFile (wickFile, callback, format) {
+        if(!format) {
+            format = 'blob';
+        }
+        if(format !== 'blob' &amp;&amp; format !== 'base64') {
+            console.error('WickFile.toWickFile: invalid format: ' + format);
+            return;
+        }
+
+        var zip = new JSZip();
+        zip.loadAsync(wickFile, {base64: format === 'base64'}).then((contents) => {
+            contents.files['project.json'].async('text')
+            .then(projectJSON => {
+                var projectData = JSON.parse(projectJSON);
+                if(!projectData.objects) {
+                    // No metadata! This is a pre 1.0.9a project. Convert it.
+                    console.log('Wick.WickFile: Converting old project format.');
+                    projectData = Wick.WickFile.Alpha.convertJsonProject(projectData);
+                }
+
+                projectData.assets = [];
+
+                for(var uuid in projectData.objects) {
+                    var data = projectData.objects[uuid];
+                    var object = Wick.Base.fromData(data);
+                    Wick.ObjectCache.addObject(object);
+                }
+
+                var project = Wick.Base.fromData(projectData.project);
+
+                Wick.ObjectCache.addObject(project);
+
+                var loadedAssetCount = 0;
+                // Immediately end if the project has no assets.
+                if (project.getAssets().length === 0) {
+                    this._prepareProject(project);
+                    callback(project);
+                } else {
+                    project.getAssets().forEach(assetData => {
+                        var assetFile = contents.files['assets/' + assetData.uuid + '.' + assetData.fileExtension];
+                        assetFile.async('base64')
+                        .then(assetFileData => {
+                            var assetSrc = 'data:' + assetData.MIMEType + ';base64,' + assetFileData;
+                            Wick.FileCache.addFile(assetSrc, assetData.uuid);
+                        }).catch(e => {
+                            console.log('Error loading asset file.');
+                            console.log(e);
+                            callback(null);
+                        }).finally(() => {
+                            assetData.load(() => {
+                                loadedAssetCount++;
+                                if(loadedAssetCount === project.getAssets().length) {
+                                    this._prepareProject(project);
+                                    callback(project);
+                                }
+                            });
+                        });
+                    });
+                }
+            });
+        }).catch((e) => {
+            console.log('Error loading project zip.')
+            console.log(e);
+            callback(null);
+        });
+    }
+
+    /**
+     * Create a wick file from the project.
+     * @param {Wick.Project} project - the project to create a wick file from
+     * @param {function} callback - Function called when the file is created. Contains the file as a parameter.
+     * @param {string} format - The format to return. Can be 'blob' or 'base64'.
+     */
+    static toWickFile (project, callback, format) {
+        if(!format) {
+            format = 'blob';
+        }
+        if(format !== 'blob' &amp;&amp; format !== 'base64') {
+            console.error('WickFile.toWickFile: invalid format: ' + format);
+            return;
+        }
+
+        // Delete unused assets before export (minimizes filesize)
+        project.cleanupUnusedAssets();
+
+        var zip = new JSZip();
+
+        // Create assets folder
+        var assetsFolder = zip.folder("assets");
+
+        // Populate assets folder with files
+        project.getAssets().filter(asset => {
+            return asset instanceof Wick.ImageAsset
+                || asset instanceof Wick.SoundAsset
+                || asset instanceof Wick.FontAsset
+                || asset instanceof Wick.ClipAsset;
+        }).forEach(asset => {
+            // Create file from asset dataurl, add it to assets folder
+            var fileExtension = asset.MIMEType.split('/')[1];
+            var filename = asset.uuid;
+            var data = asset.src.split(',')[1];
+            assetsFolder.file(filename + '.' + fileExtension, data, {base64: true});
+        });
+
+        var objectCacheSerialized = {};
+        Wick.ObjectCache.getActiveObjects(project).forEach(object => {
+            objectCacheSerialized[object.uuid] = object.serialize();
+        });
+
+        var projectSerialized = project.serialize();
+
+        for(var uuid in objectCacheSerialized) {
+            if(objectCacheSerialized[uuid].classname === 'Project') {
+                delete objectCacheSerialized[uuid];
+            }
+        }
+
+        // Remove some extra data that we don't actually want to save
+        // Clear selection:
+        for(var uuid in objectCacheSerialized) {
+            var object = objectCacheSerialized[uuid];
+            if(object.classname === 'Selection') {
+                object.selectedObjects = [];
+            }
+        }
+        // Set focus to root
+        for(var uuid in objectCacheSerialized) {
+            var object = objectCacheSerialized[uuid];
+            if(projectSerialized.children.indexOf(uuid) !== -1 &amp;&amp; object.classname === 'Clip') {
+                projectSerialized.focus = uuid;
+            }
+        }
+        // Reset all playhead positions
+        for(var uuid in objectCacheSerialized) {
+            var object = objectCacheSerialized[uuid];
+            if(object.classname === 'Timeline') {
+                object.playheadPosition = 1;
+            }
+        }
+
+        // Add project json to root directory of zip file
+        var projectData = {
+            project: projectSerialized,
+            objects: objectCacheSerialized,
+        };
+        zip.file("project.json", JSON.stringify(projectData, null, 2));
+
+        zip.generateAsync({
+            type: format,
+            compression: "DEFLATE",
+            compressionOptions: {
+                level: 9
+            },
+        }).then(callback);
+    }
+
+    /* Make any small backwards compatibility fixes needed */
+    static _prepareProject (project) {
+        // 1.16+ projects don't allow gaps between frames.
+        Wick.ObjectCache.getAllObjects().filter(object => {
+            return object instanceof Wick.Timeline;
+        }).forEach(timeline => {
+            var oldFrameGapFillMethod = timeline.fillGapsMethod;
+            timeline.fillGapsMethod = 'blank_frames';
+            timeline.resolveFrameGaps();
+            timeline.fillGapsMethod = oldFrameGapFillMethod;
+        });
+    }
+}
+</code></pre>
+        </article>
+    </section>
+
+
+
+
+</div>
+
+<nav>
+    <h2><a href="index.html">Home</a></h2><h3>Classes</h3><ul><li><a href="BuiltinAssets.html">BuiltinAssets</a></li><li><a href="GlobalAPI.html">GlobalAPI</a></li><li><a href="paper.SelectionGUI.html">SelectionGUI</a></li><li><a href="paper-paper.Selection.html">Selection</a></li><li><a href="SelectionWidget.html">SelectionWidget</a></li><li><a href="Wick.AutoSave.html">AutoSave</a></li><li><a href="Wick.Base.html">Base</a></li><li><a href="Wick.Button.html">Button</a></li><li><a href="Wick.Clip.html">Clip</a></li><li><a href="Wick.Clipboard.html">Clipboard</a></li><li><a href="Wick.FileCache.html">FileCache</a></li><li><a href="Wick.Frame.html">Frame</a></li><li><a href="Wick.GUIElement.Project.html">Project</a></li><li><a href="Wick.GUIElement.Timeline.html">Timeline</a></li><li><a href="Wick.GUIElement-Wick.GUIElement.Breadcrumbs.html">Breadcrumbs</a></li><li><a href="Wick.GUIElement-Wick.GUIElement.Button.html">Button</a></li><li><a href="Wick.History.html">History</a></li><li><a href="Wick.HTMLExport.html">HTMLExport</a></li><li><a href="Wick.HTMLPreview.html">HTMLPreview</a></li><li><a href="Wick.ImageSequence.html">ImageSequence</a></li><li><a href="Wick.Layer.html">Layer</a></li><li><a href="Wick.Path.html">Path</a></li><li><a href="Wick.Project.html">Project</a></li><li><a href="Wick.Selection.html">Selection</a></li><li><a href="Wick.Tickable.html">Tickable</a></li><li><a href="Wick.Timeline.html">Timeline</a></li><li><a href="Wick.Tools-Wick.Tools.Brush.html">Brush</a></li><li><a href="Wick.Tools-Wick.Tools.Cursor.html">Cursor</a></li><li><a href="Wick.Tools-Wick.Tools.Ellipse.html">Ellipse</a></li><li><a href="Wick.Tools-Wick.Tools.Eraser.html">Eraser</a></li><li><a href="Wick.Tools-Wick.Tools.Eyedropper.html">Eyedropper</a></li><li><a href="Wick.Tools-Wick.Tools.FillBucket.html">FillBucket</a></li><li><a href="Wick.Tools-Wick.Tools.Interact.html">Interact</a></li><li><a href="Wick.Tools-Wick.Tools.Line.html">Line</a></li><li><a href="Wick.Tools-Wick.Tools.None.html">None</a></li><li><a href="Wick.Tools-Wick.Tools.Pan.html">Pan</a></li><li><a href="Wick.Tools-Wick.Tools.Pencil.html">Pencil</a></li><li><a href="Wick.Tools-Wick.Tools.Rectangle.html">Rectangle</a></li><li><a href="Wick.Tools-Wick.Tools.Text.html">Text</a></li><li><a href="Wick.Tools-Wick.Tools.Zoom.html">Zoom</a></li><li><a href="Wick.Transformation.html">Transformation</a></li><li><a href="Wick.Tween.html">Tween</a></li><li><a href="Wick.View-Wick.View.Clip.html">Clip</a></li><li><a href="Wick.View-Wick.View.Frame.html">Frame</a></li><li><a href="Wick.View-Wick.View.Path.html">Path</a></li><li><a href="Wick.View-Wick.View.Selection.html">Selection</a></li><li><a href="Wick.WickFile.html">WickFile</a></li><li><a href="Wick.WickObjectFile.html">WickObjectFile</a></li><li><a href="Wick.ZIPExport.html">ZIPExport</a></li><li><a href="WickObjectCache.html">WickObjectCache</a></li><li><a href="Wick-Wick.Asset.html">Asset</a></li><li><a href="Wick-Wick.AudioTrack.html">AudioTrack</a></li><li><a href="Wick-Wick.ClipAsset.html">ClipAsset</a></li><li><a href="Wick-Wick.Color.html">Color</a></li><li><a href="Wick-Wick.FileAsset.html">FileAsset</a></li><li><a href="Wick-Wick.FontAsset.html">FontAsset</a></li><li><a href="Wick-Wick.GIFAsset.html">GIFAsset</a></li><li><a href="Wick-Wick.GUIElement.html">GUIElement</a></li><li><a href="Wick-Wick.ImageAsset.html">ImageAsset</a></li><li><a href="Wick-Wick.SoundAsset.html">SoundAsset</a></li><li><a href="Wick-Wick.SVGAsset.html">SVGAsset</a></li><li><a href="Wick-Wick.Tool.html">Tool</a></li><li><a href="Wick-Wick.ToolSettings.html">ToolSettings</a></li><li><a href="Wick-Wick.View.html">View</a></li></ul><h3>Global</h3><ul><li><a href="global.html#type">type</a></li><li><a href="global.html#Wick">Wick</a></li></ul>
+</nav>
+
+<br class="clear">
+
+<footer>
+    Documentation generated by <a href="https://github.com/jsdoc/jsdoc">JSDoc 3.6.4</a> on Tue Apr 21 2020 15:58:26 GMT-0400 (Eastern Daylight Time)
+</footer>
+
+<script> prettyPrint(); </script>
+<script src="scripts/linenumber.js"> </script>
+</body>
+</html>

@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>JSDoc: Source: export/audio/AudioTrack.js</title>
+
+    <script src="scripts/prettify/prettify.js"> </script>
+    <script src="scripts/prettify/lang-css.js"> </script>
+    <!--[if lt IE 9]>
+      <script src="//html5shiv.googlecode.com/svn/trunk/html5.js"></script>
+    <![endif]-->
+    <link type="text/css" rel="stylesheet" href="styles/prettify-tomorrow.css">
+    <link type="text/css" rel="stylesheet" href="styles/jsdoc-default.css">
+</head>
+
+<body>
+
+<div id="main">
+
+    <h1 class="page-title">Source: export/audio/AudioTrack.js</h1>
+
+    
+
+
+
+    
+    <section>
+        <article>
+            <pre class="prettyprint source linenums"><code>/*
+ * Copyright 2020 WICKLETS LLC
+ *
+ * This file is part of Wick Engine.
+ *
+ * Wick Engine is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * Wick Engine is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with Wick Engine.  If not, see &lt;https://www.gnu.org/licenses/>.
+ */
+
+Wick.AudioTrack = class {
+    /**
+     * @type {Wick.Project}
+     */
+    get project () {
+        return this._project;
+    }
+
+    set project (project) {
+        this._project = project;
+    }
+
+    /**
+     * Create a new AudioTrack
+     * @param {Wick.Project} project - the project to use audio from
+     */
+    constructor (project) {
+        this._project = project;
+    }
+
+    /**
+     * Generate an AudioBuffer of all the project's sounds as one audio track.
+     * @param {Function} callback -
+     */
+    toAudioBuffer (callback) {
+        var audioInfo = this.project.getAudioInfo();
+        if(audioInfo.length === 0) {
+            // No audio in the project, no AudioBuffer to create
+            callback(null);
+            return;
+        }
+        Wick.AudioTrack.generateProjectAudioBuffer(audioInfo, audioArraybuffer => {
+            callback(audioArraybuffer);
+        });
+    }
+
+    /**
+     * Create an AudioBuffer from given sounds.
+     * @param {object} projectAudioInfo - info generated from Wick.Project.getAudioInfo
+     * @param {Function} callback - callback to recieve the generated AudioBuffer
+     */
+    static generateProjectAudioBuffer (projectAudioInfo, callback) {
+        window.AudioContext = window.AudioContext || window.webkitAudioContext;
+        var ctx = new AudioContext();
+
+        let audiobuffers = [];
+
+        let prepareNextAudioInfo = () => {
+            if(projectAudioInfo.length === 0) {
+                mergeAudio();
+            } else {
+                var audioInfo = projectAudioInfo.pop();
+                this.base64ToAudioBuffer(audioInfo.src, ctx, audiobuffer => {
+                    let startSeconds = audioInfo.start / 1000;
+                    let endSeconds = audioInfo.end / 1000;
+                    let lengthSeconds = endSeconds - startSeconds;
+                    let croppedAudioBuffer = this.cropAudioBuffer(audiobuffer, lengthSeconds, ctx);
+                    let delayedAudiobuffer = this.addStartDelayToAudioBuffer(croppedAudioBuffer, startSeconds, ctx);
+                    audiobuffers.push(delayedAudiobuffer);
+                    prepareNextAudioInfo();
+                });
+            }
+        }
+
+        let mergeAudio = () => {
+            let mergedAudioBuffer = this.mergeBuffers(audiobuffers, ctx);
+            callback(mergedAudioBuffer);
+        }
+
+        prepareNextAudioInfo();
+    }
+
+    /*
+     * Merges multiple audiobuffers into a single audiobuffer.
+     * @param {AudioBuffer[]} buffers - the AudioBuffers to merge together
+     * @param {AudioContext} ac - An AudioContext instance
+     */
+    static mergeBuffers(buffers, ac) {
+        // original function from:
+        // https://github.com/meandavejustice/merge-audio-buffers/blob/master/index.js
+
+        var maxChannels = 0;
+        var maxDuration = 0;
+        for (let i = 0; i &lt; buffers.length; i++) {
+            if (buffers[i].numberOfChannels > maxChannels) {
+                maxChannels = buffers[i].numberOfChannels;
+            }
+            if (buffers[i].duration > maxDuration) {
+                maxDuration = buffers[i].duration;
+            }
+        }
+        var out = ac.createBuffer(
+            maxChannels,
+            ac.sampleRate * maxDuration,
+            ac.sampleRate
+        );
+
+        for (var j = 0; j &lt; buffers.length; j++) {
+            for (var srcChannel = 0; srcChannel &lt; buffers[j].numberOfChannels; srcChannel++) {
+                var outt = out.getChannelData(srcChannel);
+                var inn = buffers[j].getChannelData(srcChannel);
+                for (let i = 0; i &lt; inn.length; i++) {
+                    outt[i] += inn[i];
+                }
+                out.getChannelData(srcChannel).set(outt, 0);
+            }
+        }
+        return out;
+    }
+
+    /**
+     * Crops an AudioBuffer to a given length.
+     * @param {AudioBuffer} originalBuffer - the buffer to crop
+     * @param {number} delaySeconds - the time, in seconds, to crop the sound at
+     * @param {AudioContext} ctx - An AudioContext instance
+     */
+    static cropAudioBuffer (originalBuffer, lengthSeconds, ctx) {
+        // Create a blank buffer with a length of the crop amount
+        var croppedBuffer = ctx.createBuffer(
+            originalBuffer.numberOfChannels,
+            ctx.sampleRate * lengthSeconds,
+            ctx.sampleRate,
+        );
+
+        // Copy data from the original buffer into the cropped buffer
+        for (var srcChannel = 0; srcChannel &lt; croppedBuffer.numberOfChannels; srcChannel++) {
+            // Retrieve sample data...
+            var croppedBufferChannelData = croppedBuffer.getChannelData(srcChannel);
+            var originalBufferChannelData = originalBuffer.getChannelData(srcChannel);
+
+            // Copy samples from the original buffer to the cropped buffer
+            for (var i = 0; i &lt; croppedBufferChannelData.length; i++) {
+                croppedBufferChannelData[i] = originalBufferChannelData[i];
+            }
+            croppedBuffer.getChannelData(srcChannel).set(croppedBufferChannelData, 0);
+        }
+
+        return croppedBuffer;
+    }
+
+    /**
+     * Adds silence to the beginning of an AudioBuffer with a given length.
+     * @param {AudioBuffer} originalBuffer - the buffer to pad with silence
+     * @param {number} delaySeconds - the amount of time, in seconds, to delay the sound
+     * @param {AudioContext} ctx - An AudioContext instance
+     */
+    static addStartDelayToAudioBuffer (originalBuffer, delaySeconds, ctx) {
+        // Create buffer with a length equal to the original buffer's length plus the requested delay
+        var delayedBuffer = ctx.createBuffer(
+            originalBuffer.numberOfChannels,
+            ctx.sampleRate * originalBuffer.duration + ctx.sampleRate * delaySeconds,
+            ctx.sampleRate,
+        );
+
+        // For each channel in the audiobuffer...
+        for (var srcChannel = 0; srcChannel &lt; originalBuffer.numberOfChannels; srcChannel++) {
+            // Retrieve sample data...
+            var delayedBufferChannelData = delayedBuffer.getChannelData(srcChannel);
+            var originalBufferChannelData = originalBuffer.getChannelData(srcChannel);
+
+            // Copy samples from the original buffer to the delayed buffer with an offset equal to the delay
+            var delayOffset = ctx.sampleRate * delaySeconds;
+            for (var i = 0; i &lt; delayedBufferChannelData.length; i++) {
+                delayedBufferChannelData[i + delayOffset] = originalBufferChannelData[i];
+            }
+            delayedBuffer.getChannelData(srcChannel).set(delayedBufferChannelData, 0);
+        }
+
+        return delayedBuffer;
+    }
+
+    /**
+     * Convert a base64 string of an audio file into an AudioBuffer.
+     * @param {string} base64 - a base64 dataURI of an audio file.
+     * @param {AudioContext} ctx - an AudioContext instance.
+     * @param {Function} callback - callback to recieve the generated AudioBuffer
+     */
+    static base64ToAudioBuffer (base64, ctx, callback) {
+        let base64DataOnly = base64.split(',')[1];
+        let arraybuffer = Base64ArrayBuffer.decode(base64DataOnly);
+
+        ctx.decodeAudioData(arraybuffer, function(audioBuffer) {
+            callback(audioBuffer);
+        }, (e) => {
+            console.log('onError');
+            console.log(e);
+        });
+    }
+}
+</code></pre>
+        </article>
+    </section>
+
+
+
+
+</div>
+
+<nav>
+    <h2><a href="index.html">Home</a></h2><h3>Classes</h3><ul><li><a href="BuiltinAssets.html">BuiltinAssets</a></li><li><a href="GlobalAPI.html">GlobalAPI</a></li><li><a href="paper.SelectionGUI.html">SelectionGUI</a></li><li><a href="paper-paper.Selection.html">Selection</a></li><li><a href="SelectionWidget.html">SelectionWidget</a></li><li><a href="Wick.AutoSave.html">AutoSave</a></li><li><a href="Wick.Base.html">Base</a></li><li><a href="Wick.Button.html">Button</a></li><li><a href="Wick.Clip.html">Clip</a></li><li><a href="Wick.Clipboard.html">Clipboard</a></li><li><a href="Wick.FileCache.html">FileCache</a></li><li><a href="Wick.Frame.html">Frame</a></li><li><a href="Wick.GUIElement.Project.html">Project</a></li><li><a href="Wick.GUIElement.Timeline.html">Timeline</a></li><li><a href="Wick.GUIElement-Wick.GUIElement.Breadcrumbs.html">Breadcrumbs</a></li><li><a href="Wick.GUIElement-Wick.GUIElement.Button.html">Button</a></li><li><a href="Wick.History.html">History</a></li><li><a href="Wick.HTMLExport.html">HTMLExport</a></li><li><a href="Wick.HTMLPreview.html">HTMLPreview</a></li><li><a href="Wick.ImageSequence.html">ImageSequence</a></li><li><a href="Wick.Layer.html">Layer</a></li><li><a href="Wick.Path.html">Path</a></li><li><a href="Wick.Project.html">Project</a></li><li><a href="Wick.Selection.html">Selection</a></li><li><a href="Wick.Tickable.html">Tickable</a></li><li><a href="Wick.Timeline.html">Timeline</a></li><li><a href="Wick.Tools-Wick.Tools.Brush.html">Brush</a></li><li><a href="Wick.Tools-Wick.Tools.Cursor.html">Cursor</a></li><li><a href="Wick.Tools-Wick.Tools.Ellipse.html">Ellipse</a></li><li><a href="Wick.Tools-Wick.Tools.Eraser.html">Eraser</a></li><li><a href="Wick.Tools-Wick.Tools.Eyedropper.html">Eyedropper</a></li><li><a href="Wick.Tools-Wick.Tools.FillBucket.html">FillBucket</a></li><li><a href="Wick.Tools-Wick.Tools.Interact.html">Interact</a></li><li><a href="Wick.Tools-Wick.Tools.Line.html">Line</a></li><li><a href="Wick.Tools-Wick.Tools.None.html">None</a></li><li><a href="Wick.Tools-Wick.Tools.Pan.html">Pan</a></li><li><a href="Wick.Tools-Wick.Tools.Pencil.html">Pencil</a></li><li><a href="Wick.Tools-Wick.Tools.Rectangle.html">Rectangle</a></li><li><a href="Wick.Tools-Wick.Tools.Text.html">Text</a></li><li><a href="Wick.Tools-Wick.Tools.Zoom.html">Zoom</a></li><li><a href="Wick.Transformation.html">Transformation</a></li><li><a href="Wick.Tween.html">Tween</a></li><li><a href="Wick.View-Wick.View.Clip.html">Clip</a></li><li><a href="Wick.View-Wick.View.Frame.html">Frame</a></li><li><a href="Wick.View-Wick.View.Path.html">Path</a></li><li><a href="Wick.View-Wick.View.Selection.html">Selection</a></li><li><a href="Wick.WickFile.html">WickFile</a></li><li><a href="Wick.WickObjectFile.html">WickObjectFile</a></li><li><a href="Wick.ZIPExport.html">ZIPExport</a></li><li><a href="WickObjectCache.html">WickObjectCache</a></li><li><a href="Wick-Wick.Asset.html">Asset</a></li><li><a href="Wick-Wick.AudioTrack.html">AudioTrack</a></li><li><a href="Wick-Wick.ClipAsset.html">ClipAsset</a></li><li><a href="Wick-Wick.Color.html">Color</a></li><li><a href="Wick-Wick.FileAsset.html">FileAsset</a></li><li><a href="Wick-Wick.FontAsset.html">FontAsset</a></li><li><a href="Wick-Wick.GIFAsset.html">GIFAsset</a></li><li><a href="Wick-Wick.GUIElement.html">GUIElement</a></li><li><a href="Wick-Wick.ImageAsset.html">ImageAsset</a></li><li><a href="Wick-Wick.SoundAsset.html">SoundAsset</a></li><li><a href="Wick-Wick.SVGAsset.html">SVGAsset</a></li><li><a href="Wick-Wick.Tool.html">Tool</a></li><li><a href="Wick-Wick.ToolSettings.html">ToolSettings</a></li><li><a href="Wick-Wick.View.html">View</a></li></ul><h3>Global</h3><ul><li><a href="global.html#type">type</a></li><li><a href="global.html#Wick">Wick</a></li></ul>
+</nav>
+
+<br class="clear">
+
+<footer>
+    Documentation generated by <a href="https://github.com/jsdoc/jsdoc">JSDoc 3.6.4</a> on Tue Apr 21 2020 15:58:26 GMT-0400 (Eastern Daylight Time)
+</footer>
+
+<script> prettyPrint(); </script>
+<script src="scripts/linenumber.js"> </script>
+</body>
+</html>
